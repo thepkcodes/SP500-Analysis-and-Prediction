@@ -21,7 +21,7 @@ stop_words = set(stopwords.words('english'))
 sia = SentimentIntensityAnalyzer()
 
 # Twitter API credentials (replace with your own)
-BEARER_TOKEN = 'YOUR_BEARER_TOKEN'
+BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAABbt2QEAAAAAUlWnaVpd0OGbmrqVUDbTFt7J9Ww%3DELB2cRzAgfZg5CSIaRa84ER9ToDC7QPxE4EPVIVb7RdZ8QZEcZ"
 
 # Authenticate with Tweepy (v2 client)
 client = tweepy.Client(bearer_token=BEARER_TOKEN, wait_on_rate_limit=True)
