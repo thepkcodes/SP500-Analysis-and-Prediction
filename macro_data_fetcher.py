@@ -5,9 +5,26 @@ import requests
 from tqdm import tqdm
 import os
 import glob
+import tweepy
+import re
+import nltk
+from nltk.corpus import stopwords
+from nltk.sentiment import SentimentIntensityAnalyzer
 
 # FRED API key
-FRED_API_KEY = "e8470914c1a9364070f4b054b16ceb81"  # Replace this with your FRED API key
+FRED_API_KEY = "e8470914c1a9364070f4b054b16ceb81"  # FRED API key
+
+# Download NLTK resources
+nltk.download('stopwords')
+nltk.download('vader_lexicon')
+stop_words = set(stopwords.words('english'))
+sia = SentimentIntensityAnalyzer()
+
+# Twitter API credentials (replace with your own)
+BEARER_TOKEN = 'YOUR_BEARER_TOKEN'
+
+# Authenticate with Tweepy (v2 client)
+client = tweepy.Client(bearer_token=BEARER_TOKEN, wait_on_rate_limit=True)
 
 def fetch_worldbank_indicators():
     """
@@ -123,6 +140,9 @@ def merge_macro_with_stocks():
     # Merge World Bank and FRED data
     macro_data = pd.concat([wb_data, fred_data], axis=1)
     
+    # Ensure macro data index is datetime with UTC timezone
+    macro_data.index = pd.to_datetime(macro_data.index, utc=True)
+    
     # Get list of stock data files
     stock_files = glob.glob('data/raw/*_historical_data.csv')
     
@@ -131,10 +151,9 @@ def merge_macro_with_stocks():
         try:
             # Read stock data
             stock_data = pd.read_csv(stock_file)
-            stock_data['Date'] = pd.to_datetime(stock_data['Date'])
             
-            # Ensure macro data index is datetime
-            macro_data.index = pd.to_datetime(macro_data.index)
+            # Convert Date column to datetime with UTC timezone
+            stock_data['Date'] = pd.to_datetime(stock_data['Date'], utc=True)
             
             # Merge with macro data
             merged_data = pd.merge_asof(
@@ -144,6 +163,9 @@ def merge_macro_with_stocks():
                 right_index=True,
                 direction='backward'
             )
+            
+            # Convert Date back to naive datetime for saving
+            merged_data['Date'] = merged_data['Date'].dt.tz_localize(None)
             
             # Save merged data
             output_file = stock_file.replace('raw', 'processed')
@@ -156,5 +178,70 @@ def merge_macro_with_stocks():
     print("\nData merging completed!")
     print("Merged files have been saved in the 'data/processed' directory")
 
+def clean_tweet(text):
+    text = re.sub(r"http\S+|www\S+|https\S+", '', text, flags=re.MULTILINE)
+    text = re.sub(r'\@\w+|\#','', text)
+    text = re.sub(r'[^A-Za-z\s]', '', text)
+    text = text.lower()
+    text = ' '.join([word for word in text.split() if word not in stop_words])
+    return text
+
+def get_sentiment(text):
+    score = sia.polarity_scores(text)
+    if score['compound'] >= 0.05:
+        return 'positive'
+    elif score['compound'] <= -0.05:
+        return 'negative'
+    else:
+        return 'neutral'
+
+def fetch_tweets():
+    """
+    Fetch tweets about S&P 500 stocks for the last 5 years
+    """
+    # List of S&P 500 stock tickers (example subset, use full list as needed)
+    sp500_tickers = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA']
+
+    # Date range: last 5 years
+    end_time = datetime.utcnow()
+    start_time = end_time - timedelta(days=5*365)
+
+    all_tweets = []
+
+    for ticker in tqdm(sp500_tickers, desc='Tickers'):
+        query = f'${ticker} -is:retweet lang:en'
+        # Twitter Academic Research endpoint: search_all_tweets
+        try:
+            tweets = tweepy.Paginator(
+                client.search_all_tweets,
+                query=query,
+                start_time=start_time.isoformat("T") + "Z",
+                end_time=end_time.isoformat("T") + "Z",
+                tweet_fields=['created_at', 'text', 'author_id'],
+                max_results=100
+            ).flatten(limit=1000)  # Adjust limit as needed (API rate limits apply)
+
+            for tweet in tweets:
+                cleaned = clean_tweet(tweet.text)
+                sentiment = get_sentiment(cleaned)
+                all_tweets.append({
+                    'ticker': ticker,
+                    'created_at': tweet.created_at,
+                    'text': tweet.text,
+                    'cleaned_text': cleaned,
+                    'sentiment': sentiment,
+                    'author_id': tweet.author_id
+                })
+        except Exception as e:
+            print(f"Error fetching tweets for {ticker}: {e}")
+
+    # Convert to DataFrame
+    df = pd.DataFrame(all_tweets)
+    print(df.head())
+
+    # Save to CSV
+    df.to_csv('sp500_tweets_sentiment_5years.csv', index=False)
+
 if __name__ == "__main__":
-    merge_macro_with_stocks() 
+    merge_macro_with_stocks()
+    fetch_tweets() 
