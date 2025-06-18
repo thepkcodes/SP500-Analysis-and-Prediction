@@ -124,6 +124,70 @@ graph TD
 - **Real-time Updates**: Automated data refresh
 - **Monitoring**: Model performance tracking
 
+### 7. 📊 Data Collection
+```bash
+# Collect stock data
+python stock_data_fetcher.py
+
+# Collect macroeconomic data
+python macro_data_fetcher.py
+
+# Analyze news sentiment
+python sentiment_analyzer.py
+```
+
+### 8. 📰 Sentiment Analysis
+The sentiment analysis script (`sentiment_analyzer.py`) processes news headlines using the FinBERT model:
+
+**Features:**
+- Uses the `yiyanghkust/finbert-tone` model for financial sentiment analysis
+- Processes headlines in batches of 32 for efficiency
+- Maps sentiment labels to numerical scores: positive (1), neutral (0), negative (-1)
+- Aggregates daily sentiment scores with statistics
+- Handles missing or blank headlines gracefully
+- Filters data for the specified date range (2020-06-15 to 2025-06-11)
+
+**Output Files:**
+- `daily_sentiment.csv`: Daily aggregated sentiment scores with statistics
+- `headlines_with_sentiment.csv`: Individual headlines with sentiment scores
+
+**Usage:**
+```bash
+python sentiment_analyzer.py
+```
+
+**Requirements:**
+- The script requires the `gdelt_headlines.csv` file with 'date' and 'headline' columns
+- Dependencies: transformers, torch, pandas, numpy, tqdm
+
+### 9. 🧠 Train Models
+```bash
+# Run Jupyter notebooks for model development
+jupyter notebook notebooks/
+
+# Or run individual scripts
+python src/models/lstm_model.py
+python src/models/transformer_model.py
+```
+
+### 10. 🌐 Launch Web Application
+```bash
+# Launch Streamlit dashboard
+streamlit run src/web/dashboard.py
+
+# Or launch Flask API
+python src/web/api.py
+```
+
+### 11. 🧪 Run Tests
+```bash
+# Run all tests
+python -m pytest tests/
+
+# Run specific test file
+python -m pytest tests/test_data_fetcher.py
+```
+
 ---
 
 ## 📁 Folder Structure
@@ -237,16 +301,40 @@ WORLD_BANK_API_KEY=your_world_bank_key
 ### 5. 📊 Data Collection
 ```bash
 # Collect stock data
-python src/data/stock_data_fetcher.py
+python stock_data_fetcher.py
 
 # Collect macroeconomic data
-python src/data/macro_data_fetcher.py
+python macro_data_fetcher.py
 
-# Collect sentiment data
-python src/data/sentiment_analyzer.py
+# Analyze news sentiment
+python sentiment_analyzer.py
 ```
 
-### 6. 🧠 Train Models
+### 6. 📰 Sentiment Analysis
+The sentiment analysis script (`sentiment_analyzer.py`) processes news headlines using the FinBERT model:
+
+**Features:**
+- Uses the `yiyanghkust/finbert-tone` model for financial sentiment analysis
+- Processes headlines in batches of 32 for efficiency
+- Maps sentiment labels to numerical scores: positive (1), neutral (0), negative (-1)
+- Aggregates daily sentiment scores with statistics
+- Handles missing or blank headlines gracefully
+- Filters data for the specified date range (2020-06-15 to 2025-06-11)
+
+**Output Files:**
+- `daily_sentiment.csv`: Daily aggregated sentiment scores with statistics
+- `headlines_with_sentiment.csv`: Individual headlines with sentiment scores
+
+**Usage:**
+```bash
+python sentiment_analyzer.py
+```
+
+**Requirements:**
+- The script requires the `gdelt_headlines.csv` file with 'date' and 'headline' columns
+- Dependencies: transformers, torch, pandas, numpy, tqdm
+
+### 7. 🧠 Train Models
 ```bash
 # Run Jupyter notebooks for model development
 jupyter notebook notebooks/
@@ -256,7 +344,7 @@ python src/models/lstm_model.py
 python src/models/transformer_model.py
 ```
 
-### 7. 🌐 Launch Web Application
+### 8. 🌐 Launch Web Application
 ```bash
 # Launch Streamlit dashboard
 streamlit run src/web/dashboard.py
@@ -265,7 +353,7 @@ streamlit run src/web/dashboard.py
 python src/web/api.py
 ```
 
-### 8. 🧪 Run Tests
+### 9. 🧪 Run Tests
 ```bash
 # Run all tests
 python -m pytest tests/
