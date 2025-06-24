@@ -1,8 +1,0 @@
-yfinance>=0.2.36
-pandas>=2.0.0
-lxml>=4.9.0  # Required for pd.read_html
-tqdm>=4.65.0  # For progress bars
-requests>=2.31.0  # For API calls
-transformers>=4.30.0  # For FinBERT model
-torch>=2.0.0  # PyTorch for deep learning
-numpy>=1.24.0  # For numerical operations 

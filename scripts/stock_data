@@ -1,0 +1,103 @@
+import yfinance as yf
+import pandas as pd
+from datetime import datetime, timedelta
+import time
+
+def fetch_stock_data():
+    # List of 50 famous stocks
+    famous_stocks = [
+        'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'BRK-B', 'AVGO', 'JPM',
+        'JNJ', 'V', 'WMT', 'XOM', 'UNH', 'MA', 'PG', 'HD', 'CVX', 'ABBV',
+        'BAC', 'ORCL', 'KO', 'ASML', 'LLY', 'COST', 'PEP', 'TMO', 'MRK', 'ADBE',
+        'NFLX', 'WFC', 'CRM', 'ACN', 'DHR', 'VZ', 'TXN', 'NEE', 'AMD', 'LIN',
+        'ABT', 'QCOM', 'PM', 'RTX', 'SPGI', 'HON', 'IBM', 'CAT', 'GE', 'NOW'
+    ]
+    
+    # Calculate date range (last 5 years)
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=5*365)
+    
+    print(f"Fetching stock data from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+    print(f"Number of stocks: {len(famous_stocks)}")
+    
+    all_data = []
+    failed_tickers = []
+    
+    for i, ticker in enumerate(famous_stocks, 1):
+        try:
+            print(f"Fetching data for {ticker} ({i}/{len(famous_stocks)})...")
+            
+            # Fetch stock data
+            stock = yf.Ticker(ticker)
+            hist = stock.history(start=start_date, end=end_date)
+            
+            if hist.empty:
+                print(f"  Warning: No data found for {ticker}")
+                failed_tickers.append(ticker)
+                continue
+            
+            # Reset index to make Date a column
+            hist.reset_index(inplace=True)
+            
+            # Add ticker column
+            hist['Ticker'] = ticker
+            
+            # Select and rename columns to match required format
+            hist = hist[['Date', 'Ticker', 'Open', 'High', 'Low', 'Close', 'Volume']]
+            hist.columns = ['Date', 'Ticker', 'Open', 'High', 'Low', 'Close', 'Volume']
+            
+            # Convert Date to string format
+            hist['Date'] = hist['Date'].dt.strftime('%Y-%m-%d')
+            
+            all_data.append(hist)
+            print(f"  Successfully fetched {len(hist)} records for {ticker}")
+            
+            # Add a small delay to avoid overwhelming the API
+            time.sleep(0.1)
+            
+        except Exception as e:
+            print(f"  Error fetching data for {ticker}: {str(e)}")
+            failed_tickers.append(ticker)
+            continue
+    
+    if not all_data:
+        print("No data was successfully fetched!")
+        return
+    
+    # Combine all data
+    combined_df = pd.concat(all_data, ignore_index=True)
+    
+    # Sort by date and ticker
+    combined_df = combined_df.sort_values(['Date', 'Ticker']).reset_index(drop=True)
+    
+    # Save to CSV
+    filename = 'stock_data.csv'
+    combined_df.to_csv(filename, index=False)
+    
+    print(f"\n{'='*50}")
+    print(f"Data collection completed!")
+    print(f"Total records: {len(combined_df):,}")
+    print(f"Date range: {combined_df['Date'].min()} to {combined_df['Date'].max()}")
+    print(f"Successful tickers: {len(famous_stocks) - len(failed_tickers)}")
+    print(f"Failed tickers: {failed_tickers if failed_tickers else 'None'}")
+    print(f"Data saved to: {filename}")
+    print(f"{'='*50}")
+    
+    # Display sample data
+    print("\nSample data (first 10 rows):")
+    print(combined_df.head(10).to_string(index=False))
+    
+    return combined_df
+
+if __name__ == "__main__":
+    # Check if yfinance is installed
+    try:
+        import yfinance as yf
+        print("yfinance library found. Starting data fetch...")
+    except ImportError:
+        print("Error: yfinance library not found!")
+        print("Please install it using: pip install yfinance")
+        exit(1)
+    
+    # Fetch and save stock data
+    df = fetch_stock_data()
