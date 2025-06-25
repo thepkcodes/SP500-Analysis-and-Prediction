@@ -1,0 +1,215 @@
+import pandas as pd
+from fredapi import Fred
+from datetime import datetime, timedelta
+import time
+import numpy as np
+
+def fetch_macro_data():
+    """
+    Fetch US macroeconomic indicators for the last 5 years from FRED database
+    """
+    
+    # Initialize FRED API
+    fred = Fred(api_key='e8470914c1a9364070f4b054b16ceb81')
+    
+    # Calculate date range (last 5 years)
+    end_date = datetime.now().date()
+    start_date = end_date - timedelta(days=5*365)
+    
+    print(f"Fetching macroeconomic data from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+    
+    # Dictionary of macroeconomic indicators with their FRED series IDs
+    macro_indicators = {
+        # Interest Rates & Monetary Policy
+        'Fed_Funds_Rate': 'FEDFUNDS',                    # Federal Funds Rate (%)
+        'US_10Y_Treasury': 'GS10',                       # 10-Year Treasury Rate (%)
+        'US_3M_Treasury': 'GS3M',                        # 3-Month Treasury Rate (%)
+        'US_2Y_Treasury': 'GS2',                         # 2-Year Treasury Rate (%)
+        
+        # Inflation Indicators
+        'CPI_All_Items': 'CPIAUCSL',                     # Consumer Price Index
+        'Core_CPI': 'CPILFESL',                          # Core CPI (ex food & energy)
+        'PCE_Price_Index': 'PCEPI',                      # PCE Price Index
+        'Core_PCE': 'PCEPILFE',                          # Core PCE Price Index
+        
+        # Economic Growth & Activity
+        'GDP_Real': 'GDPC1',                             # Real GDP (Quarterly)
+        'Industrial_Production': 'INDPRO',               # Industrial Production Index
+        'Capacity_Utilization': 'TCU',                  # Total Capacity Utilization
+        'ISM_Manufacturing': 'NAPM',                     # ISM Manufacturing PMI
+        'ISM_Services': 'NAPMSI',                        # ISM Services PMI
+        
+        # Labor Market
+        'Unemployment_Rate': 'UNRATE',                   # Unemployment Rate (%)
+        'Nonfarm_Payrolls': 'PAYEMS',                    # Total Nonfarm Payrolls (1000s)
+        'Labor_Force_Participation': 'CIVPART',         # Labor Force Participation Rate
+        'Initial_Claims': 'ICSA',                        # Initial Jobless Claims
+        'Continuing_Claims': 'CCSA',                     # Continuing Jobless Claims
+        
+        # Consumer & Retail
+        'Retail_Sales': 'RSAFS',                         # Retail Sales
+        'Consumer_Confidence': 'UMCSENT',                # University of Michigan Consumer Sentiment
+        'Personal_Income': 'PI',                         # Personal Income
+        'Personal_Spending': 'PCE',                      # Personal Consumption Expenditures
+        'Personal_Saving_Rate': 'PSAVERT',               # Personal Saving Rate
+        
+        # Housing Market
+        'Housing_Starts': 'HOUST',                       # Housing Starts
+        'Building_Permits': 'PERMIT',                    # Building Permits
+        'Existing_Home_Sales': 'EXHOSLUSM495S',          # Existing Home Sales
+        'Case_Shiller_Home_Price': 'CSUSHPISA',          # Case-Shiller Home Price Index
+        
+        # Financial Markets
+        'VIX': 'VIXCLS',                                 # CBOE Volatility Index
+        'Dollar_Index': 'DTWEXBGS',                      # Trade Weighted US Dollar Index
+        'Credit_Spread': 'BAMLC0A0CM',                   # Investment Grade Credit Spread
+        
+        # Money Supply & Credit
+        'M2_Money_Supply': 'M2SL',                       # M2 Money Supply
+        'Bank_Credit': 'TOTBKCR',                        # Total Bank Credit
+        'Commercial_Paper': 'COMPOUT',                   # Commercial Paper Outstanding
+        
+        # Commodity Prices
+        'Oil_Price_WTI': 'DCOILWTICO',                   # WTI Crude Oil Price
+        'Gold_Price': 'GOLDAMGBD228NLBM',                # Gold Price
+        'Copper_Price': 'PCOPPUSDM',                     # Copper Price
+    }
+    
+    all_data = {}
+    failed_indicators = []
+    
+    print(f"Fetching {len(macro_indicators)} macroeconomic indicators...")
+    
+    for i, (name, series_id) in enumerate(macro_indicators.items(), 1):
+        try:
+            print(f"Fetching {name} ({series_id}) - {i}/{len(macro_indicators)}")
+            
+            # Fetch data from FRED with proper date filtering
+            data = fred.get_series(series_id, start=start_date, end=end_date)
+            
+            if data.empty:
+                print(f"  Warning: No data found for {name}")
+                failed_indicators.append(name)
+                continue
+            
+            # Additional filtering to ensure we only get data within our date range
+            data = data[data.index >= pd.to_datetime(start_date)]
+            data = data[data.index <= pd.to_datetime(end_date)]
+            
+            if data.empty:
+                print(f"  Warning: No data in date range for {name}")
+                failed_indicators.append(name)
+                continue
+            
+            # Store the data
+            all_data[name] = data
+            print(f"  Successfully fetched {len(data)} records from {data.index.min().strftime('%Y-%m-%d')} to {data.index.max().strftime('%Y-%m-%d')}")
+            
+            # Small delay to be respectful to the API
+            time.sleep(0.1)
+            
+        except Exception as e:
+            print(f"  Error fetching {name}: {str(e)}")
+            failed_indicators.append(name)
+            continue
+    
+    if not all_data:
+        print("No macroeconomic data was successfully fetched!")
+        return
+    
+    # Convert to DataFrame
+    macro_df = pd.DataFrame(all_data)
+    
+    # Reset index to make Date a column
+    macro_df.reset_index(inplace=True)
+    macro_df.rename(columns={'index': 'Date'}, inplace=True)
+    
+    # Ensure we only have data from the last 5 years
+    macro_df['Date'] = pd.to_datetime(macro_df['Date'])
+    macro_df = macro_df[macro_df['Date'] >= pd.to_datetime(start_date)]
+    macro_df = macro_df[macro_df['Date'] <= pd.to_datetime(end_date)]
+    
+    # Convert Date to string format (YYYY-MM-DD) to match stock data format
+    macro_df['Date'] = macro_df['Date'].dt.strftime('%Y-%m-%d')
+    
+    # Forward fill missing values (common in economic data)
+    macro_df = macro_df.fillna(method='ffill')
+    
+    # Sort by date
+    macro_df = macro_df.sort_values('Date').reset_index(drop=True)
+    
+    # Save to CSV
+    filename = 'macro_data.csv'
+    macro_df.to_csv(filename, index=False)
+    
+    print(f"\n{'='*60}")
+    print(f"Macroeconomic data collection completed!")
+    print(f"Total records: {len(macro_df):,}")
+    print(f"Date range: {macro_df['Date'].min()} to {macro_df['Date'].max()}")
+    print(f"Successful indicators: {len(all_data)}")
+    print(f"Failed indicators: {failed_indicators if failed_indicators else 'None'}")
+    print(f"Data saved to: {filename}")
+    print(f"{'='*60}")
+    
+    # Display sample data
+    print(f"\nSample data (first 5 rows, first 10 columns):")
+    display_cols = ['Date'] + list(macro_df.columns[1:10])
+    print(macro_df[display_cols].head().to_string(index=False))
+    
+    # Show data info
+    print(f"\nData Info:")
+    print(f"Shape: {macro_df.shape}")
+    print(f"Columns: {list(macro_df.columns)}")
+    
+    return macro_df
+
+def merge_stock_macro_data(stock_file='all_stocks_5y_data.csv', 
+                          macro_file='macro_data.csv',
+                          output_file='combined_stock_macro_data.csv'):
+    """
+    Function to merge stock data with macroeconomic data
+    """
+    try:
+        print(f"Loading stock data from {stock_file}...")
+        stock_df = pd.read_csv(stock_file)
+        
+        print(f"Loading macro data from {macro_file}...")
+        macro_df = pd.read_csv(macro_file)
+        
+        print("Merging datasets...")
+        # Merge on Date (left join to keep all stock data)
+        combined_df = pd.merge(stock_df, macro_df, on='Date', how='left')
+        
+        # Forward fill macro data for missing dates (weekends, holidays)
+        macro_cols = [col for col in combined_df.columns if col not in ['Date', 'Ticker', 'Open', 'High', 'Low', 'Close', 'Volume']]
+        combined_df[macro_cols] = combined_df.groupby('Ticker')[macro_cols].fillna(method='ffill')
+        
+        # Save combined data
+        combined_df.to_csv(output_file, index=False)
+        
+        print(f"\n{'='*50}")
+        print(f"Data merge completed!")
+        print(f"Combined dataset shape: {combined_df.shape}")
+        print(f"Combined data saved to: {output_file}")
+        print(f"{'='*50}")
+        
+        return combined_df
+        
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        print("Make sure both stock and macro data files exist before merging.")
+    except Exception as e:
+        print(f"Error during merge: {e}")
+
+if __name__ == "__main__":
+    # Check if fredapi is installed
+    try:
+        from fredapi import Fred
+        print("fredapi library found. Starting macro data fetch...")
+    except ImportError:
+        print("Error: fredapi library not found!")
+        print("Please install it using: pip install fredapi")
+        exit(1)
+    
+    # Fetch macroeconomic data
+    macro_df = fetch_macro_data()

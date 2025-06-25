@@ -1,0 +1,433 @@
+import requests
+import pandas as pd
+from datetime import datetime, timedelta
+import time
+import json
+from textblob import TextBlob
+import re
+import urllib.parse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import warnings
+warnings.filterwarnings('ignore')
+
+class HistoricalNewsAnalyzer:
+    def __init__(self, marketaux_key=None):
+        self.marketaux_key = marketaux_key
+        self.session = requests.Session()
+        
+    def calculate_sentiment(self, text):
+        """
+        Calculate sentiment score using TextBlob
+        Returns: sentiment_score (-1 to 1), tone (Positive/Negative/Neutral)
+        """
+        try:
+            if not text or pd.isna(text):
+                return 0.0, "Neutral"
+            
+            # Clean text
+            text = re.sub(r'[^\w\s]', ' ', str(text))
+            text = ' '.join(text.split())
+            
+            # Calculate sentiment using TextBlob
+            blob = TextBlob(text)
+            sentiment_score = blob.sentiment.polarity
+            
+            # Classify tone
+            if sentiment_score > 0.1:
+                tone = "Positive"
+            elif sentiment_score < -0.1:
+                tone = "Negative"
+            else:
+                tone = "Neutral"
+                
+            return round(sentiment_score, 4), tone
+            
+        except Exception as e:
+            print(f"Error calculating sentiment: {e}")
+            return 0.0, "Neutral"
+    
+    def fetch_marketaux_news(self, ticker, start_date, end_date):
+        """
+        Fetch historical news from MarketAux API
+        Free tier: 100 requests/month, paid tiers available
+        """
+        if not self.marketaux_key:
+            return []
+            
+        try:
+            # MarketAux API endpoint
+            url = "https://api.marketaux.com/v1/news/all"
+            
+            # Convert dates to the required format
+            start_str = start_date.strftime('%Y-%m-%d')
+            end_str = end_date.strftime('%Y-%m-%d')
+            
+            params = {
+                'symbols': ticker,
+                'filter_entities': 'true',
+                'published_after': start_str,
+                'published_before': end_str,
+                'language': 'en',
+                'limit': 1000,  # Max per request
+                'api_token': self.marketaux_key
+            }
+            
+            response = self.session.get(url, params=params)
+            
+            if response.status_code == 429:
+                print(f"  Rate limit exceeded for MarketAux")
+                time.sleep(60)  # Wait 1 minute
+                return []
+            elif response.status_code != 200:
+                print(f"  MarketAux error {response.status_code} for {ticker}")
+                return []
+            
+            data = response.json()
+            articles = data.get('data', [])
+            
+            news_items = []
+            for article in articles:
+                title = article.get('title', '')
+                description = article.get('description', '')
+                published_at = article.get('published_at', '')
+                
+                if published_at:
+                    # Convert to date format
+                    try:
+                        date_obj = datetime.fromisoformat(published_at.replace('Z', '+00:00'))
+                        date = date_obj.strftime('%Y-%m-%d')
+                    except:
+                        continue
+                else:
+                    continue
+                
+                # Combine title and description for sentiment
+                full_text = f"{title} {description}"
+                sentiment_score, tone = self.calculate_sentiment(full_text)
+                
+                news_items.append({
+                    'Date': date,
+                    'Ticker': ticker,
+                    'Headline': title[:300] if title else '',
+                    'Tone': tone,
+                    'Sentiment_Score': sentiment_score
+                })
+            
+            return news_items
+            
+        except Exception as e:
+            print(f"  Error with MarketAux for {ticker}: {e}")
+            return []
+    
+    def fetch_gdelt_news(self, ticker, company_name, start_date, end_date):
+        """
+        Fetch news from GDELT (Global Database of Events, Language, and Tone)
+        Free service, no API key needed
+        """
+        try:
+            # GDELT 2.0 Doc API
+            base_url = "https://api.gdeltproject.org/api/v2/doc/doc"
+            
+            # Create search query
+            search_terms = [ticker]
+            if company_name:
+                # Add company name variations
+                company_words = company_name.split()
+                if len(company_words) > 1:
+                    search_terms.append(f'"{company_name}"')
+                    search_terms.append(company_words[0])  # First word of company name
+            
+            query = " OR ".join(search_terms)
+            
+            # GDELT date format: YYYYMMDDHHMMSS
+            start_str = start_date.strftime('%Y%m%d000000')
+            end_str = end_date.strftime('%Y%m%d235959')
+            
+            params = {
+                'query': query,
+                'mode': 'artlist',
+                'format': 'json',
+                'startdatetime': start_str,
+                'enddatetime': end_str,
+                'maxrecords': 250,  # Max per request
+                'sort': 'datedesc'
+            }
+            
+            response = self.session.get(base_url, params=params)
+            
+            if response.status_code == 429:
+                print(f"  Rate limit for GDELT, waiting...")
+                time.sleep(10)
+                return []
+            elif response.status_code != 200:
+                print(f"  GDELT error {response.status_code} for {ticker}")
+                return []
+            
+            data = response.json()
+            articles = data.get('articles', [])
+            
+            news_items = []
+            for article in articles:
+                title = article.get('title', '')
+                url_article = article.get('url', '')
+                date_published = article.get('seendate', '')
+                
+                if date_published and len(date_published) >= 8:
+                    # Convert YYYYMMDDHHMMSS to YYYY-MM-DD
+                    try:
+                        date = f"{date_published[0:4]}-{date_published[4:6]}-{date_published[6:8]}"
+                        # Validate date
+                        datetime.strptime(date, '%Y-%m-%d')
+                    except:
+                        continue
+                else:
+                    continue
+                
+                # Filter for financial news (basic keyword filtering)
+                title_lower = title.lower()
+                financial_keywords = ['stock', 'share', 'earnings', 'revenue', 'profit', 'market', 
+                                    'trading', 'investor', 'financial', 'quarter', 'sales', 'growth']
+                
+                # Check if title contains financial keywords or ticker
+                is_financial = (ticker.lower() in title_lower or 
+                              any(keyword in title_lower for keyword in financial_keywords))
+                
+                if not is_financial:
+                    continue
+                
+                # Calculate sentiment
+                sentiment_score, tone = self.calculate_sentiment(title)
+                
+                news_items.append({
+                    'Date': date,
+                    'Ticker': ticker,
+                    'Headline': title[:300] if title else '',
+                    'Tone': tone,
+                    'Sentiment_Score': sentiment_score
+                })
+            
+            return news_items
+            
+        except Exception as e:
+            print(f"  Error with GDELT for {ticker}: {e}")
+            return []
+
+    def fetch_news_for_date_range(self, ticker, company_name, start_date, end_date):
+        """
+        Fetch news for a specific ticker and date range from multiple sources
+        """
+        all_news = []
+        
+        # Fetch from MarketAux if API key provided
+        if self.marketaux_key and self.marketaux_key != "YOUR_MARKETAUX_KEY_HERE":
+            try:
+                marketaux_news = self.fetch_marketaux_news(ticker, start_date, end_date)
+                all_news.extend(marketaux_news)
+                print(f"    MarketAux: {len(marketaux_news)} articles")
+                time.sleep(1)  # Rate limiting
+            except Exception as e:
+                print(f"    MarketAux failed: {e}")
+        
+        # Fetch from GDELT (free)
+        try:
+            gdelt_news = self.fetch_gdelt_news(ticker, company_name, start_date, end_date)
+            all_news.extend(gdelt_news)
+            print(f"    GDELT: {len(gdelt_news)} articles")
+            time.sleep(2)  # Be respectful to free API
+        except Exception as e:
+            print(f"    GDELT failed: {e}")
+        
+        return all_news
+
+def fetch_historical_news_data():
+    """
+    Main function to fetch 5 years of historical news data
+    """
+    
+    # API Keys
+    MARKETAUX_KEY = "SgiWA1oC3N8NwfehF3iyBYMSfY0vvFTUtLEwFceN"
+    
+    # Company names for better news search
+    ticker_to_company = {
+        'AAPL': 'Apple Inc', 'MSFT': 'Microsoft Corporation', 'GOOGL': 'Alphabet Inc', 
+        'AMZN': 'Amazon.com Inc', 'NVDA': 'NVIDIA Corporation', 'TSLA': 'Tesla Inc',
+        'META': 'Meta Platforms Inc', 'BRK-B': 'Berkshire Hathaway', 'AVGO': 'Broadcom Inc',
+        'JPM': 'JPMorgan Chase', 'JNJ': 'Johnson & Johnson', 'V': 'Visa Inc',
+        'WMT': 'Walmart Inc', 'XOM': 'Exxon Mobil Corporation', 'UNH': 'UnitedHealth Group',
+        'MA': 'Mastercard Incorporated', 'PG': 'Procter & Gamble', 'HD': 'Home Depot',
+        'CVX': 'Chevron Corporation', 'ABBV': 'AbbVie Inc', 'BAC': 'Bank of America',
+        'ORCL': 'Oracle Corporation', 'KO': 'Coca-Cola Company', 'ASML': 'ASML Holding',
+        'LLY': 'Eli Lilly and Company', 'COST': 'Costco Wholesale', 'PEP': 'PepsiCo Inc',
+        'TMO': 'Thermo Fisher Scientific', 'MRK': 'Merck & Co', 'ADBE': 'Adobe Inc',
+        'NFLX': 'Netflix Inc', 'WFC': 'Wells Fargo', 'CRM': 'Salesforce Inc',
+        'ACN': 'Accenture plc', 'DHR': 'Danaher Corporation', 'VZ': 'Verizon Communications',
+        'TXN': 'Texas Instruments', 'NEE': 'NextEra Energy', 'AMD': 'Advanced Micro Devices',
+        'LIN': 'Linde plc', 'ABT': 'Abbott Laboratories', 'QCOM': 'QUALCOMM Incorporated',
+        'PM': 'Philip Morris International', 'RTX': 'Raytheon Technologies', 'SPGI': 'S&P Global',
+        'HON': 'Honeywell International', 'IBM': 'International Business Machines', 
+        'CAT': 'Caterpillar Inc', 'GE': 'General Electric', 'NOW': 'ServiceNow Inc'
+    }
+    
+    # Initialize analyzer
+    analyzer = HistoricalNewsAnalyzer(MARKETAUX_KEY)
+    
+    # Date range: last 5 years
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=5*365)  # 5 years
+    
+    print("Fetching 5 years of historical financial news...")
+    print(f"Date range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+    print(f"Number of stocks: {len(ticker_to_company)}")
+    print("Sources: GDELT (free), MarketAux (optional)")
+    print("="*80)
+    
+    all_news = []
+    successful_tickers = []
+    failed_tickers = []
+    
+    # Process tickers in smaller date chunks for better API performance
+    def process_ticker_chunk(ticker, company_name, chunk_start, chunk_end):
+        """Process a ticker for specific date range"""
+        try:
+            return analyzer.fetch_news_for_date_range(ticker, company_name, chunk_start, chunk_end)
+        except Exception as e:
+            print(f"    Error processing {ticker} for {chunk_start} to {chunk_end}: {e}")
+            return []
+    
+    # Process each ticker
+    for i, (ticker, company_name) in enumerate(ticker_to_company.items(), 1):
+        print(f"\nProcessing {ticker} - {company_name} ({i}/{len(ticker_to_company)})...")
+        
+        ticker_news = []
+        
+        # Split into yearly chunks to avoid API limits
+        current_start = start_date
+        while current_start < end_date:
+            current_end = min(current_start + timedelta(days=365), end_date)
+            
+            print(f"  Fetching {current_start.strftime('%Y-%m-%d')} to {current_end.strftime('%Y-%m-%d')}...")
+            
+            chunk_news = process_ticker_chunk(ticker, company_name, current_start, current_end)
+            ticker_news.extend(chunk_news)
+            
+            current_start = current_end
+            
+            # Rate limiting between chunks
+            time.sleep(2)
+        
+        if ticker_news:
+            # Remove duplicates based on headline and date
+            seen = set()
+            unique_news = []
+            for news in ticker_news:
+                key = (news['Date'], news['Headline'][:50])
+                if key not in seen:
+                    seen.add(key)
+                    unique_news.append(news)
+            
+            all_news.extend(unique_news)
+            successful_tickers.append(ticker)
+            print(f"  Total unique articles for {ticker}: {len(unique_news)}")
+        else:
+            failed_tickers.append(ticker)
+            print(f"  No news found for {ticker}")
+    
+    if not all_news:
+        print("\nNo news data was successfully fetched!")
+        print("\nTroubleshooting:")
+        print("1. GDELT is free but may have rate limits")
+        print("2. Get MarketAux API key from https://www.marketaux.com/")
+        print("3. Make sure you have internet connection")
+        return None
+    
+    # Convert to DataFrame
+    news_df = pd.DataFrame(all_news)
+    
+    # Remove duplicates and sort
+    news_df = news_df.drop_duplicates(subset=['Date', 'Ticker', 'Headline']).reset_index(drop=True)
+    news_df = news_df.sort_values(['Date', 'Ticker']).reset_index(drop=True)
+    
+    # Save to CSV
+    filename = 'historical_stock_news_sentiment_5years.csv'
+    news_df[['Date', 'Ticker', 'Headline', 'Tone', 'Sentiment_Score']].to_csv(filename, index=False)
+    
+    print(f"\n{'='*80}")
+    print(f"Historical news sentiment analysis completed!")
+    print(f"Total unique articles: {len(news_df):,}")
+    print(f"Date range: {news_df['Date'].min()} to {news_df['Date'].max()}")
+    print(f"Successful tickers: {len(successful_tickers)}")
+    print(f"Failed tickers: {len(failed_tickers)}")
+    print(f"Data saved to: {filename}")
+    print(f"{'='*80}")
+    
+    # Display sample data
+    print(f"\nSample data (first 10 rows):")
+    sample_df = news_df[['Date', 'Ticker', 'Headline', 'Tone', 'Sentiment_Score']].head(10)
+    print(sample_df.to_string(index=False, max_colwidth=50))
+    
+    # Show statistics
+    print(f"\nDataset Statistics:")
+    print(f"Articles per ticker (average): {len(news_df) / len(successful_tickers):.1f}")
+    print(f"Date coverage: {(pd.to_datetime(news_df['Date'].max()) - pd.to_datetime(news_df['Date'].min())).days} days")
+    
+    # Show sentiment distribution
+    sentiment_dist = news_df['Tone'].value_counts()
+    print(f"\nSentiment Distribution:")
+    for tone, count in sentiment_dist.items():
+        percentage = (count / len(news_df)) * 100
+        print(f"  {tone}: {count:,} ({percentage:.1f}%)")
+    
+    # Show articles by year
+    news_df['Year'] = pd.to_datetime(news_df['Date']).dt.year
+    yearly_dist = news_df['Year'].value_counts().sort_index()
+    print(f"\nArticles by Year:")
+    for year, count in yearly_dist.items():
+        print(f"  {year}: {count:,} articles")
+    
+    return news_df
+
+if __name__ == "__main__":
+    # Check if required libraries are installed
+    required_libs = ['requests', 'pandas', 'textblob']
+    missing_libs = []
+    
+    for lib in required_libs:
+        try:
+            __import__(lib)
+        except ImportError:
+            missing_libs.append(lib)
+    
+    if missing_libs:
+        print(f"Error: Missing required libraries - {', '.join(missing_libs)}")
+        print("Please install required libraries using:")
+        print("pip install requests pandas textblob")
+        print("python -m textblob.download_corpora")
+        exit(1)
+    
+    print("\n" + "="*80)
+    print("HISTORICAL NEWS FETCHER (5 YEARS)")
+    print("This script uses multiple sources for historical data:")
+    print("1. GDELT Project (free, global news database)")
+    print("2. MarketAux API (optional, paid service with free tier)")
+    print("="*80 + "\n")
+    
+    # Warning about time
+    print("⚠️  WARNING: This script will take 30-60 minutes to complete")
+    print("   It fetches 5 years of data for 45+ tickers")
+    print("   Progress will be shown for each ticker\n")
+    
+    user_input = input("Continue? (y/n): ").lower().strip()
+    if user_input not in ['y', 'yes']:
+        print("Aborted.")
+        exit(0)
+    
+    # Fetch historical news data
+    start_time = datetime.now()
+    news_df = fetch_historical_news_data()
+    end_time = datetime.now()
+    
+    if news_df is not None:
+        print(f"\n🎉 Success! Completed in {(end_time - start_time).total_seconds()/60:.1f} minutes")
+        print(f"📁 Data saved to: historical_stock_news_sentiment_5years.csv")
+    else:
+        print("❌ Failed to fetch news data. Check the troubleshooting tips above.")
